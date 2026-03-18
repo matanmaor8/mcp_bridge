@@ -1,0 +1,14 @@
+{
+  "name": "chatgpt-codex-bridge-app",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "health": "node -e \"fetch('http://localhost:8787/health').then(r=>r.text()).then(t=>console.log(t))\"",
+    "test:server": "node tests/test_server.mjs"
+  },
+  "dependencies": {
+    "express": "^4.22.1"
+  }
+}

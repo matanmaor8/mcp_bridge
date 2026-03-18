@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Codex Bridge Control</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f4f5f7; color: #111; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 16px; }
+    .card { background: white; border-radius: 16px; padding: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.08); margin-bottom: 16px; }
+    label { display:block; font-size: 12px; margin-bottom: 6px; color:#444; }
+    input, textarea, select, button { font: inherit; }
+    input, textarea, select { width:100%; box-sizing:border-box; padding: 10px 12px; border:1px solid #cfd4dc; border-radius: 10px; background:#fff; color:#111; }
+    textarea { min-height: 180px; resize: vertical; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap: 12px; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top: 12px; }
+    button { padding: 10px 14px; border-radius: 10px; border:1px solid #ccd2da; background:#fff; cursor:pointer; }
+    button.primary { background:#111bf5; color:white; border-color:#111bf5; }
+    pre { white-space: pre-wrap; word-break: break-word; background:#0f172a; color:#e5e7eb; padding: 12px; border-radius: 12px; overflow:auto; }
+    .muted { color:#666; font-size: 13px; }
+    .status { font-weight: 700; }
+    @media (max-width: 720px){ .grid{ grid-template-columns:1fr; } .wrap{ padding:12px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h2 style="margin-top:0">Codex Bridge Control</h2>
+      <p class="muted">Use this from your laptop or mobile browser. Default values are prefilled for your current setup.</p>
+      <div class="grid">
+        <div>
+          <label for="baseUrl">Bridge Base URL</label>
+          <input id="baseUrl" value="" placeholder="https://your-ngrok-url" />
+        </div>
+        <div>
+          <label for="token">Bearer token (optional)</label>
+          <input id="token" value="" placeholder="Only if MCP_BEARER_TOKEN is enabled" />
+        </div>
+        <div>
+          <label for="mode">Mode</label>
+          <select id="mode">
+            <option value="codex" selected>codex</option>
+            <option value="repo">repo</option>
+            <option value="mock">mock</option>
+            <option value="openai">openai</option>
+          </select>
+        </div>
+        <div>
+          <label for="repo">Repo path</label>
+          <input id="repo" value="C:\Users\matan\Downloads\floor_plan_ai_windows_friendly\floor_plan_ai_windows_friendly" />
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <label for="task">Task</label>
+        <textarea id="task">Make one minimal safe code improvement in a single file, keep tests passing, and report modified files.</textarea>
+      </div>
+      <div class="actions">
+        <button id="save">Save fields</button>
+        <button id="health">Health check</button>
+        <button id="start" class="primary">Start job</button>
+        <button id="statusBtn">Refresh status</button>
+        <button id="resultBtn">Fetch result</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div><span class="muted">Job ID:</span> <span id="jobId" class="status">—</span></div>
+      <div><span class="muted">Status:</span> <span id="jobStatus" class="status">—</span></div>
+      <div><span class="muted">Summary:</span> <span id="summary">—</span></div>
+      <div><span class="muted">Changed files:</span> <span id="changedFiles">—</span></div>
+      <div><span class="muted">Tests passed:</span> <span id="testsPassed">—</span></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Raw result</h3>
+      <pre id="output">No output yet.</pre>
+    </div>
+  </div>
+  <script>
+    const els = Object.fromEntries([...document.querySelectorAll('[id]')].map(el => [el.id, el]));
+    const STORE_KEY = 'bridge-webapp-v3';
+
+    function loadSettings() {
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+      els.baseUrl.value = saved.baseUrl || window.location.origin;
+      els.token.value = saved.token || '';
+      els.mode.value = saved.mode || 'codex';
+      els.repo.value = saved.repo || 'C:\\Users\\matan\\Downloads\\floor_plan_ai_windows_friendly\\floor_plan_ai_windows_friendly';
+      els.task.value = saved.task || els.task.value;
+      if (saved.jobId) els.jobId.textContent = saved.jobId;
+    }
+
+    function saveSettings() {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        baseUrl: els.baseUrl.value.trim(),
+        token: els.token.value,
+        mode: els.mode.value,
+        repo: els.repo.value,
+        task: els.task.value,
+        jobId: els.jobId.textContent !== '—' ? els.jobId.textContent : ''
+      }));
+    }
+
+    function authHeaders() {
+      const headers = { 'Content-Type': 'application/json' };
+      const token = els.token.value.trim();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      return headers;
+    }
+
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, options);
+      const text = await response.text();
+      let data;
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}\n${text}`);
+      return data;
+    }
+
+    function updateParsed(result) {
+      const parsed = result?.parsed || result?.result?.parsed || {};
+      els.summary.textContent = parsed.summary || '—';
+      els.changedFiles.textContent = (parsed.changedFiles || []).length ? parsed.changedFiles.join(', ') : 'none';
+      els.testsPassed.textContent = parsed.testsPassed || '—';
+    }
+
+    els.save.onclick = () => {
+      saveSettings();
+      els.output.textContent = 'Saved locally.';
+    };
+
+    els.health.onclick = async () => {
+      saveSettings();
+      try {
+        const data = await fetchJson(`${els.baseUrl.value.trim()}/health`);
+        els.output.textContent = JSON.stringify(data, null, 2);
+      } catch (err) { els.output.textContent = String(err); }
+    };
+
+    els.start.onclick = async () => {
+      saveSettings();
+      try {
+        const data = await fetchJson(`${els.baseUrl.value.trim()}/run_async`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ task: els.task.value, mode: els.mode.value, repo: els.repo.value })
+        });
+        els.jobId.textContent = data.jobId || '—';
+        els.jobStatus.textContent = data.status || '—';
+        els.summary.textContent = 'Job started.';
+        saveSettings();
+        els.output.textContent = JSON.stringify(data, null, 2);
+      } catch (err) { els.output.textContent = String(err); }
+    };
+
+    els.statusBtn.onclick = async () => {
+      saveSettings();
+      const jobId = els.jobId.textContent.trim();
+      if (!jobId || jobId === '—') { els.output.textContent = 'No job ID yet.'; return; }
+      try {
+        const data = await fetchJson(`${els.baseUrl.value.trim()}/jobs/${encodeURIComponent(jobId)}`, { headers: authHeaders() });
+        els.jobStatus.textContent = data.status || '—';
+        els.output.textContent = JSON.stringify(data, null, 2);
+      } catch (err) { els.output.textContent = String(err); }
+    };
+
+    els.resultBtn.onclick = async () => {
+      saveSettings();
+      const jobId = els.jobId.textContent.trim();
+      if (!jobId || jobId === '—') { els.output.textContent = 'No job ID yet.'; return; }
+      try {
+        const data = await fetchJson(`${els.baseUrl.value.trim()}/jobs/${encodeURIComponent(jobId)}/result`, { headers: authHeaders() });
+        els.jobStatus.textContent = data.status || '—';
+        if (data.result) updateParsed(data.result);
+        els.output.textContent = JSON.stringify(data, null, 2);
+      } catch (err) { els.output.textContent = String(err); }
+    };
+
+    loadSettings();
+  </script>
+</body>
+</html>
